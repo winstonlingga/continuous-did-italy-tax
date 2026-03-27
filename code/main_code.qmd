@@ -1,0 +1,432 @@
+---
+title: "Italian Non-Dom Tax Regime: Spatial Equilibrium Analysis"
+format: html
+editor: visual
+---
+
+# Fiscal Amenities and Spatial Inequality
+
+Research Question: How did Italy's 2017 non-dom tax regime affect regionalhousing prices and housing-burden inequality?
+
+Methodology: Continuous Difference-in-Differences with:
+
+-   Regional Amenity Index (tourism, crime, coastal access);
+
+-   Event study diagnostics;
+
+-   Pre-trend validation.
+
+Author: Winston Lingga Ho
+
+# 1. SETUP AND DEPENDENCIES
+
+## Load libraries
+
+```{r}
+# Load libraries
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(fixest)
+library(modelsummary)
+library(tidyverse)
+library(sf)
+library(eurostat)
+library(giscoR)
+library(viridis)
+library(kableExtra)
+library(corrplot)
+```
+
+# 2. DATA LOADING AND INITIAL CLEANING
+
+```{r}
+# Load main dataset
+final <- read_csv("../data/final_dataset_with_AmenityIndex.csv")
+
+#save outputs in output folder
+dir.create("../output")
+
+# Ensure correct data types
+final$territory_code <- as.character(final$territory_code)
+final$Region <- as.character(final$Region)
+final$Year <- as.numeric(final$Year)
+
+cat("Dataset shape:", nrow(final), "rows x", ncol(final), "columns\n")
+cat("Years covered:", min(final$Year, na.rm = TRUE), "-", 
+    max(final$Year, na.rm = TRUE), "\n")
+```
+
+# 3. Amenity Index construction
+
+The Amenity Index combines pre-2017 regional characteristics: 1. Foreign tourist nights per capita (tourism intensity) 2. Crime rate per 100,000 inhabitants (inverted) 3. Coastal dummy (binary indicator) Formula: AmenityIndex = Z_Tourism - Z_Crime + Coastal
+
+```{r}
+# 3. Time-invariant amenity index (z-scores from 2015-2019 averages)
+final <- final %>%
+  mutate(
+    z_tourism    = as.numeric(scale(foreign_pc_avg)),
+    z_crime      = as.numeric(scale(crime_avg)),
+    AmenityIndex = z_tourism - z_crime + coastal_dummy,
+    Post = ifelse(Year >= 2017, 1, 0)
+  )
+
+
+# Sanity checks
+cat("\n--- Final Dataset Diagnostics ---\n")
+cat("Total observations:", nrow(final), "\n")
+cat("Number of regions:", n_distinct(final$territory_code), "\n")
+cat("Years:", min(final$Year), "-", max(final$Year), "\n")
+cat("Missing values in key variables:\n")
+print(colSums(is.na(final[, c("AmenityIndex", "log_HPI_average",
+                              "Observation_Income_Percentage", "Post")])))
+
+# Summary statistics for key variables
+cat("\nAmenity Index Summary:\n")
+print(summary(final$AmenityIndex))
+
+
+```
+
+# 4. DESCRIPTIVE STATISTICS AND VISUALIZATIONS
+
+```{r}
+# 4a. Summary statistics table
+summary_stats <- final %>%
+  select(log_HPI_average, Observation_Income_Percentage, AmenityIndex,
+         foreign_pc_avg, crime_avg, coastal_dummy, population) %>%
+  summarise(
+    across(everything(), list(
+      Mean = ~mean(., na.rm = TRUE),
+      SD = ~sd(., na.rm = TRUE),
+      Min = ~min(., na.rm = TRUE),
+      Median = ~median(., na.rm = TRUE),
+      Max = ~max(., na.rm = TRUE)
+    ))
+  ) %>%
+  pivot_longer(everything()) %>%
+  separate(name, into = c("variable", "stat"), sep = "_(?=[^_]+$)") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+cat("\n--- Summary Statistics ---\n")
+print(summary_stats)
+```
+
+```{r}
+# 4b. Correlation matrix of amenity components
+corr_matrix <- final %>%
+  select(foreign_pc_avg, crime_avg, coastal_dummy, AmenityIndex) %>%
+  cor(use = "pairwise.complete.obs")
+
+cat("\n--- Correlation Matrix ---\n")
+print(corr_matrix)
+```
+
+```{r}
+# 4c. Figure 1: Choropleth map of Amenity Index
+nuts2_map <- get_eurostat_geospatial(nuts_level = "2", year = 2016)
+
+map_data <- nuts2_map %>%
+  filter(CNTR_CODE == "IT") %>%
+  left_join(
+    final %>% select(territory_code, AmenityIndex),
+    by = c("NUTS_ID" = "territory_code")
+  )
+
+fig1_amenity_map <- ggplot(map_data) +
+  geom_sf(aes(fill = AmenityIndex)) +
+  scale_fill_viridis_c(option = "magma", na.value = "grey90") +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Amenity Index Across Italian Regions (NUTS-2)",
+    subtitle = "Pre-2017 tourism intensity, crime rates, and coastal access",
+    fill = "Amenity\nIndex"
+  )
+
+ggsave("../output/01_amenity_map.png", fig1_amenity_map, width = 10, height = 8, dpi = 300)
+print(fig1_amenity_map)
+```
+
+```{r}
+# 4d. Figure 2: Distribution of Amenity Index
+fig2_amenity_dist <- ggplot(final, aes(x = AmenityIndex)) +
+  geom_histogram(bins = 15, fill = "steelblue", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = median(AmenityIndex, na.rm = TRUE)), 
+             linetype = "dashed", color = "red", size = 1) +
+  theme_minimal() +
+  labs(
+    title = "Distribution of Regional Amenity Index",
+    subtitle = "Red line indicates median (used to define high/low-amenity groups)",
+    x = "Amenity Index",
+    y = "Frequency"
+  )
+
+ggsave("../output/02_amenity_distribution.png", fig2_amenity_dist, width = 10, height = 6, dpi = 300)
+print(fig2_amenity_dist)
+
+```
+
+```{r}
+# 4e. Figure 3: Housing price spaghetti plot
+fig3_hpi_spaghetti <- ggplot(final, aes(x = Year, y = log_HPI_average,
+                                        group = Region, color = Region)) +
+  geom_line(alpha = 0.6, size = 0.8) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "black", size = 1) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(
+    title = "Housing Price Trends Across Italian Regions",
+    subtitle = "Dashed line indicates 2017 non-dom tax reform",
+    x = "Year",
+    y = "log(Housing Price Index)"
+  )
+
+ggsave("../output/03_hpi_spaghetti.png", fig3_hpi_spaghetti, width = 12, height = 7, dpi = 300)
+print(fig3_hpi_spaghetti)
+```
+
+```{r}
+# 4f. Figure 4: Pre-trend comparison (high vs low amenity)
+final <- final %>%
+  mutate(high_amenity = AmenityIndex > median(AmenityIndex, na.rm = TRUE))
+pretrend <- final %>%
+  group_by(Year, high_amenity) %>%
+  summarise(mean_hpi = mean(log_HPI_average, na.rm = TRUE))
+
+fig4_pretrend <- ggplot(pretrend, aes(x = Year, y = mean_hpi, 
+                                      color = high_amenity, fill = high_amenity)) +
+  geom_line(size = 1.1) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("FALSE" = "#E74C3C", "TRUE" = "#3498DB"),
+                     labels = c("FALSE" = "Low Amenity", "TRUE" = "High Amenity")) +
+  scale_fill_manual(values = c("FALSE" = "#E74C3C", "TRUE" = "#3498DB"),
+                    labels = c("FALSE" = "Low Amenity", "TRUE" = "High Amenity")) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(
+    title = "Pre-Treatment Housing Price Trends by Amenity Level",
+    subtitle = "High- and low-amenity regional trends before and after the 2017 reform",
+    x = "Year",
+    y = "log(Housing Price Index)",
+    color = "Group",
+    fill = "Group"
+  )
+
+ggsave("../output/04_pretrend_by_amenity.png", fig4_pretrend, width = 10, height = 7, dpi = 300)
+print(fig4_pretrend)
+```
+
+```{r}
+# 4g. Figure 5: Scatterplot of amenity vs pre-period HPI
+pre_period_data <- final %>%
+  filter(Year < 2017) %>%
+  group_by(territory_code) %>%
+  summarise(
+    pre_hpi = mean(log_HPI_average, na.rm = TRUE),
+    AmenityIndex = first(AmenityIndex),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(AmenityIndex))
+
+fig5_amenity_scatter <- ggplot(pre_period_data, aes(x = AmenityIndex, y = pre_hpi)) +
+  geom_point(size = 3, color = "darkblue", alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", alpha = 0.2) +
+  theme_minimal() +
+  labs(
+    title = "Relationship Between Amenities and Pre-Reform Housing Prices",
+    subtitle = "Pre-period average (2011–2016)",
+    x = "Amenity Index",
+    y = "log(Housing Price Index)",
+    caption = "Fitted line shows simple linear relationship"
+  )
+
+ggsave("../output/05_amenity_hpi_scatter.png", fig5_amenity_scatter, width = 10, height = 7, dpi = 300)
+print(fig5_amenity_scatter)
+
+```
+
+# 5. DIFFERENCE-IN-DIFFERENCES ANALYSIS
+
+```{r}
+# Remove observations with missing key variables for analysis
+analysis_data <- final %>%
+  filter(!is.na(log_HPI_average),
+         !is.na(Observation_Income_Percentage),
+         !is.na(AmenityIndex),
+         !is.na(Post))
+
+cat("\n--- Analysis Sample Size ---\n")
+cat("Total observations:", nrow(analysis_data), "\n")
+cat("Unique regions:", n_distinct(analysis_data$territory_code), "\n")
+cat("Unique years:", n_distinct(analysis_data$Year), "\n")
+cat("Pre-reform observations:", nrow(filter(analysis_data, Post == 0)), "\n")
+cat("Post-reform observations:", nrow(filter(analysis_data, Post == 1)), "\n")
+```
+
+```{r}
+# 5a. Main DiD specification: Housing Prices
+did_hpi <- feols(
+  log_HPI_average ~ AmenityIndex * Post | territory_code + Year,
+  data = analysis_data,
+  cluster = ~territory_code
+)
+
+cat("\n--- DiD Estimate: Housing Prices ---\n")
+cat("Coefficient (AmenityIndex × Post):", coef(did_hpi)["AmenityIndex:Post"], "\n")
+cat("Std. Error:", sqrt(diag(vcov(did_hpi)))["AmenityIndex:Post"], "\n")
+summary(did_hpi)
+```
+
+```{r}
+# 5b. Secondary DiD specification: Housing-Cost Burdens
+did_inequality <- feols(
+  Observation_Income_Percentage ~ AmenityIndex * Post | territory_code + Year,
+  data = analysis_data,
+  cluster = ~territory_code
+)
+
+cat("\n--- DiD Estimate: Housing-Cost Burdens ---\n")
+cat("Coefficient (AmenityIndex × Post):", coef(did_inequality)["AmenityIndex:Post"], "\n")
+cat("Std. Error:", sqrt(diag(vcov(did_inequality)))["AmenityIndex:Post"], "\n")
+summary(did_inequality)
+```
+
+# 6. EVENT STUDY DIAGNOSTICS
+
+```{r}
+# The continuous event study validates the parallel trends assumption and
+# provides year-by-year treatment effects.
+
+analysis_data <- analysis_data %>%
+  mutate(rel_year = Year - 2017)
+
+# Event study: Housing Prices
+event_hpi <- feols(
+  log_HPI_average ~ 
+    i(rel_year, AmenityIndex, ref = -1) | territory_code + Year,
+  data = analysis_data,
+  cluster = ~territory_code
+)
+
+# Extract event study coefficients for plotting
+event_coefs <- broom::tidy(event_hpi) %>%
+  filter(grepl("AmenityIndex", term)) %>%
+  mutate(
+    rel_year = as.numeric(gsub(".*rel_year::(\\-?\\d+).*", "\\1", term)),
+    estimate = estimate,
+    std.error = std.error,
+    ci_lower = estimate - 1.96 * std.error,
+    ci_upper = estimate + 1.96 * std.error
+  ) %>%
+  filter(!is.na(rel_year))
+
+fig6_event_study <- ggplot(event_coefs, aes(x = rel_year, y = estimate)) +
+  geom_point(size = 3, color = "darkblue") +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2, color = "darkblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = -0.5, linetype = "dashed", color = "black", alpha = 0.5) +
+  theme_minimal() +
+  theme(panel.grid.major.x = element_line(color = "grey90")) +
+  labs(
+    title = "Continuous Event Study: Effect of Amenity on Housing Prices",
+    subtitle = "Pre-2017 coefficients should be near zero (parallel trends); dashed line at 2017 reform",
+    x = "Years Relative to 2017 Reform",
+    y = "Coefficient (95% CI)",
+    caption = "Negative rel_year = before reform; Positive = after reform"
+  )
+
+ggsave("../output/06_event_study.png", fig6_event_study, width = 11, height = 7, dpi = 300)
+print(fig6_event_study)
+```
+
+# 7. ROBUSTNESS AND DIAGNOSTIC CHECKS
+
+```{r}
+# 7a. Pre-trend regression (2011-2016 only)
+pretreat_data <- analysis_data %>%
+  filter(Year < 2017)
+
+pretrend_reg <- feols(
+  log_HPI_average ~ AmenityIndex * Year | territory_code + Year,
+  data = pretreat_data,
+  cluster = ~territory_code
+)
+
+cat("\n--- Pre-Trend Regression (2011-2016) ---\n")
+cat("Testing for differential trends before reform...\n")
+summary(pretrend_reg)
+```
+
+```{r}
+# 7b. Balance check visualization
+balance_check <- analysis_data %>%
+  group_by(high_amenity, Post) %>%
+  summarise(
+    mean_hpi = mean(log_HPI_average, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  )
+
+cat("\n--- Balance Check: Mean HPI by Group and Period ---\n")
+print(balance_check)
+```
+
+# 8. EXPORT RESULTS
+
+```{r}
+# Create comprehensive results table
+results_table <- modelsummary(
+  list("Housing Prices" = did_hpi, 
+       "Housing-Cost Burdens" = did_inequality),
+  output = "gt",
+  fmt = 3,
+  stars = c('*' = 0.1, '**' = 0.05, '***' = 0.01),
+  gof_omit = "IC|Log|Within|Pseudo|F"
+)
+```
+
+```{r}
+# Export as multiple formats
+modelsummary(
+  list("Housing Prices" = did_hpi, 
+       "Housing-Cost Burdens" = did_inequality),
+  output = "../output/results_table.tex",
+  fmt = 3,
+  stars = c('*' = 0.1, '**' = 0.05, '***' = 0.01),
+  gof_omit = "IC|Log|Within|Pseudo|F"
+)
+
+modelsummary(
+  list("Housing Prices" = did_hpi, 
+       "Housing-Cost Burdens" = did_inequality),
+  output = "../output/results_table.html",
+  fmt = 3,
+  stars = c('*' = 0.1, '**' = 0.05, '***' = 0.01),
+  gof_omit = "IC|Log|Within|Pseudo|F"
+)
+
+cat("\n✓ Results tables exported to tables/ directory\n")
+
+```
+
+# 9. SESSION INFO AND SUMMARY
+
+```{r}
+cat("\n==============================================================================\n")
+cat("ANALYSIS COMPLETE\n")
+cat("==============================================================================\n")
+cat("\nKey Findings:\n")
+cat("- Housing Price Effect:", round(coef(did_hpi)["AmenityIndex:Post"], 4), "\n")
+cat("- Housing Burden Effect:", round(coef(did_inequality)["AmenityIndex:Post"], 4), "\n")
+cat("\nOutput files saved:\n")
+cat("  Figures: 01_amenity_map.png through 06_event_study.png\n")
+cat("  Tables:  results_table.tex, results_table.html\n")
+cat("\nSession info:\n")
+sessionInfo()
+```
