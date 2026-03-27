@@ -25,19 +25,19 @@ This repository contains a simplified and reorganised version of the original gr
 ### Pre-treatment trends
 Parallel trends across high- and low-amenity regions prior to the 2017 reform.
 
-![Pre-trend](output/figures/04_pretrend_by_amenity.png)
+![Pre-trend](output/04_pretrend_by_amenity.png)
 
 ### Event study
 Dynamic effects of the reform by amenity level. Pre-treatment coefficients are close to zero.
 
-![Event study](output/figures/06_event_study.png)
+![Event study](output/06_event_study.png)
 
 ### Amenity index
 Regional variation in treatment intensity.
 
-![Amenity map](output/figures/01_amenity_map.png)
+![Amenity map](output/01_amenity_map.png)
 
 ### Housing price trends
 Raw regional dynamics around the reform.
 
-![Spaghetti plot](output/figures/03_hpi_spaghetti.png)
+![Spaghetti plot](output/03_hpi_spaghetti.png)
