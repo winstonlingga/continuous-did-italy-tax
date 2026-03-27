@@ -15,7 +15,6 @@ Did high-amenity Italian regions experience larger post-2017 increases in housin
 ## Repository structure
 - `code/`: data preparation, estimation, and figure scripts
 - `output/`: selected tables and figures
-- `data/`: placeholder only; original data not included
-
+- `data/`: merged dataset from ISTAT included, original datasets available upon request
 ## Note
 This repository contains a simplified and reorganised version of the original group project code. The public version reflects my own restructuring of the workflow for clarity and reproducibility.
